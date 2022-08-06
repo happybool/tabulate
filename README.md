@@ -22,3 +22,5 @@ To start the local development server from the `excel-addin` directory:
 Open Excel for the web. Click "Insert" Menu (Ribbon) > Click "Office Add-ins" > Click "Upload My Add-in" in the upper right corner > Select `excel-addin/manifest.xml` ([source](https://docs.microsoft.com/en-us/office/dev/add-ins/testing/sideload-office-add-ins-for-testing#sideload-an-office-add-in-in-office-on-the-web))
 
 You should see a new "OpenAI API" command group on the "Home" ribbon; click the "Tabulate" button to open the sidebar with API commands
+
+Added powershell script should be able to automate installation. Please refer to install.ps1
