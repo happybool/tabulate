@@ -27,7 +27,7 @@ var request = require('sync-request');
 
 
 var CELL_SEPARATOR = ' | '
-var CONTEXT = ``
+var CONTEXT = ''
 
 function _hash(...args) {
     return sha224(args);
@@ -165,6 +165,8 @@ async function make_request({context_string, logprobs, length, temperature=0.0})
         json: payload,
         gzip: false,
     });
+
+	var test =0;
     return response;
 }
 
@@ -176,6 +178,8 @@ async function suggest_fields({topic, count, fields=[]}) {
     const response_json = await cached_request({context_string: context_string, logprobs: 5, length: 48});
     
     var texts = response_json['choices'][0]['text'];
+	if(texts.includes("--")==true) // If composed multiline result, take only first line
+		texts=texts.split('\n')[0];
     const logits = response_json['choices'][0]['logprobs']['top_logprobs'];
     const text_offsets = response_json['choices'][0]['logprobs']['text_offset'];
 
@@ -250,7 +254,7 @@ async function suggest_completions({topic, fields, completions=[], side_info=[],
     const query_obj = _build_completion_query_context_string({topic: topic, fields: fields, completions: completions, side_info: side_info});
     const context_string = query_obj["context_string"];
     const existing_completions = query_obj["existing_completions"];
-    const response_json = await cached_request({context_string: context_string + existing_completions, logprobs: 0, length: 100, temperature: temperature});
+    const response_json = await cached_request({context_string: context_string + existing_completions, logprobs: 4, length: 2048, temperature: temperature});
 
     // TODO could use logits here to produce hybrid answers
     const text_offsets = response_json['choices'][0]['logprobs']['text_offset'];
@@ -421,21 +425,21 @@ function completeTable() {
         sheet.getRangeByIndexes(range.rowIndex, range.columnIndex, 1, range.columnCount).set(boldProps);
 
         var max_tries = 3;
-        for(let i = 0; i < max_tries; i++) {
+        //for(let i = 0; i < max_tries; i++) {
             var pruned_completions = _maybe_prune_completions(completions_obj, fields.length, range.rowCount);
             var tmp_results = pruned_completions["result"].slice();
             tmp_results.unshift(fields);
             sheet.getRangeByIndexes(range.rowIndex, range.columnIndex, tmp_results.length, range.columnCount).values = tmp_results;
             await context.sync();
-            if (tmp_results.length == range.rowCount) {
+            /*if (tmp_results.length == range.rowCount) {
                 break;
             }
             if (i < max_tries - 1) {
                 showToast(`Completing a table for ${topic}...`);
                 temperature += 0.7;
                 completions_obj = await suggest_completions({topic: topic, fields: fields, completions: pruned_completions['result'], temperature: temperature});
-            }
-        }
+            }*/
+        //}
         if (pruned_completions["result"].length + 1 != range.rowCount) {
             showToast("Could not complete table in one go; this usually means the selected area is too big. You can try clicking \"Complete Table\" again.")
         }
