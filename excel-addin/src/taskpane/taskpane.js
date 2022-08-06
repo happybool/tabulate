@@ -1,7 +1,7 @@
 /* global console, document, Excel, Office */
 
 const AUTH_KEY = 'Bearer ***KEY HERE***';
-const ORGANIZATION = '***ORG HERE***'
+const ORGANIZATION = '***ORG HERE***';
 
 Office.onReady(info => {
     if (info.host === Office.HostType.Excel) {
@@ -27,35 +27,10 @@ var request = require('sync-request');
 
 
 var CELL_SEPARATOR = ' | '
-var CONTEXT = `Please build a table summarizing wars in the 20th century
-| Name | Start | End |
-| Gulf War | 1991 | 2003 |
-| Vietnam War | 1955 | 1975 |
-| Korean War | 1950 | 1953|
-| World War II | 1941 | 1945 |
-| Spanish Civil War | 1936 | 1939 |
-| World War I | 1914 | 1918 |
-| Russo-Japanese War | 1904 | 1905 |
-| Boer War | 1899 | 1902 |
-| Boxer Rebellion | 1899 | 1901 |
-| Mexican Revolution | 1910 | 1920 |
-| Russo-Turkish War | 1877 | 1878 |
-| Franco-Prussian War | 1870 | 1871 |
-| Franco-Austrian War | 1859 | 1866 |
-
-Please build a table summarizing top websites
-| Site | Alexa Rank | Revenue |
-| Google | 1 | $66.89 billion |
-| Facebook | 2 | $15.09 billion |
-| Youtube | 3 | $5.87 billion |
-| Yahoo! | 4 | $3.81 billion |
-| Wikipedia | 5 | $1.88 billion |
-| Amazon | 6 | $1.88 billion |
-| eBay | 7 | $1.87 billion |
-`
+var CONTEXT = ``
 
 function _hash(...args) {
-    return sha224(args.join(""));
+    return sha224(args);
 }
 
 
@@ -108,7 +83,7 @@ function _build_field_query_context_string({topic, fields=[]}) {
     return `${CONTEXT}${TOPIC_QUERY}${field_string}`;
 }
 
-function _build_completion_query_context_string({topic, fields, completions=[], partial=[], side_info=[]}) {
+function _build_completion_query_context_string({topic, fields, completions=[], side_info=[]}) {
     // TODO assert for malformed completions (incomplete tables)
     const field_string = `| ${fields.join(CELL_SEPARATOR)} |\n`;
     var completion_string = '';
@@ -118,10 +93,6 @@ function _build_completion_query_context_string({topic, fields, completions=[], 
     }
     else {
         completion_string = completions.map(x => `| ${x.join(CELL_SEPARATOR)} |`).join("\n") + "\n|";
-    }
-
-    if (partial.length) {
-        completion_string += ` ${partial.join(CELL_SEPARATOR)}`;
     }
 
     if (side_info.length) {
@@ -150,10 +121,10 @@ async function cached_request({context_string, logprobs, length, temperature=0.0
         length = 24;
     }
     const request_hash = _hash(context_string, logprobs, length);
-    var cached_result = getWithExpiry(request_hash);
+    var cached_result = null;//getWithExpiry(request_hash);
     if (cached_result === null) {
         // TODO handle non-200 code
-        cached_result = make_request({context_string: context_string, logprobs: logprobs, length: length, temperature: temperature});
+        cached_result = await make_request({context_string: context_string, logprobs: logprobs, length: length, temperature: temperature});
     }
     else {
         await sleep(Math.floor(Math.random() * 500) + 250);
@@ -163,6 +134,7 @@ async function cached_request({context_string, logprobs, length, temperature=0.0
     }
     try {
         setWithExpiry(request_hash, cached_result, 1800);
+		showToast(context_string);
     }
     catch(err) {
         console.log('Issue caching, possible too large: ', err, cached_result.length);
@@ -171,23 +143,24 @@ async function cached_request({context_string, logprobs, length, temperature=0.0
     return cached_result;
 }
 
-function make_request({context_string, logprobs, length, temperature=0.0}) {
-    var headers = {
+async function make_request({context_string, logprobs, length, temperature=0.0}) {
+	var url = "https://api.openai.com/v1/engines/text-davinci-002/completions";
+
+  var headers = {
         'Content-Type': 'application/json',
         'Authorization': AUTH_KEY,
         'OpenAI-Organization': ORGANIZATION,
     };
-    var payload = {
-        "completions": 1,
-        "context": context_string,
-        "length": length,
-        "logprobs": logprobs,
+	    var payload = {
+         "prompt": context_string,
+    "max_tokens": length,
+		"logprobs": 5,
         "stream": false,
         "temperature": temperature,
         "top_p": 1,
-    };
+		};
     // Practical example
-    var response = _do_fetch_json('post', 'https://api.openai.com/v1/engines/davinci/generate', {
+    var response = _do_fetch_json('post', url, {
         headers: headers,
         json: payload,
         gzip: false,
@@ -197,43 +170,52 @@ function make_request({context_string, logprobs, length, temperature=0.0}) {
 
 // given a topic, and a (possibly empty, possibly partial) list of fields,
 // produce a new list of fields + possible extra completions
-async function suggest_fields({topic, fields=[]}) {
+async function suggest_fields({topic, count, fields=[]}) {
     const context_string = _build_field_query_context_string({topic: topic, fields: fields});
+
     const response_json = await cached_request({context_string: context_string, logprobs: 5, length: 48});
-    const text_offsets = response_json['data'][0]['text_offset'];
-    const texts = response_json['data'][0]['text'];
-    const logits = response_json['data'][0]['top_logprobs'];
+    
+    var texts = response_json['choices'][0]['text'];
+    const logits = response_json['choices'][0]['logprobs']['top_logprobs'];
+    const text_offsets = response_json['choices'][0]['logprobs']['text_offset'];
 
     // first index after context
     var context_idx = text_offsets.indexOf(context_string.length);
     // newline at end of sampled header
-    var endheader_idx = texts.indexOf('\n', context_idx);
+    texts = texts.replaceAll('\n|', ' | ');
+	texts = texts.replaceAll(' |\n', '');
     // pull out the actual fields, the -1 is for the ending |
-    var sampled_fields = _strip(texts.slice(context_idx, endheader_idx-1).join("")).split(CELL_SEPARATOR);
-
+	var sampled_fields = _strip(texts.slice(0)).split(CELL_SEPARATOR);
     // # we need to join onto end tokens
-    if (fields.length && _strip(texts[context_idx-1]) == fields[fields.length-1]) {
-        sampled_fields = [fields[fields.length-1] + sampled_fields[0], ...sampled_fields.slice(1)];
-        fields = fields.slice(0, -1);
-    }
-
+    //if (fields.length && _strip(texts[context_idx-1]) == fields[fields.length-1]) {
+    //    sampled_fields = [fields[fields.length-1] + sampled_fields[0], ...sampled_fields.slice(1)];
+    //    fields = fields.slice(0, -1);
+    //}
+	for(let i = 0; i < sampled_fields.length; i++) {
+		sampled_fields[i] = _strip(sampled_fields[i].replace('|',''))
+	}
     // pull the other possible options for the endheader newline. these should be
     // other possible fields, in likelihood order (though it will only be the
     // first token)
-    const sorted_fields = Object.entries(logits[endheader_idx][0]).sort((a, b) => { return b[1] - a[1] });
-    const extra_fields = sorted_fields.filter(x => x[0] != '\n' && x[0] != ' ').map(x => [_strip(x[0]), x[1]]);
+        //const sorted_fields = Object.entries(logits[endheader_idx][0]).sort((a, b) => { return b[1] - a[1] });
+    //const extra_fields = sorted_fields.filter(x => x[0] != '\n' && x[0] != ' ').map(x => [_strip(x[0]), x[1]]);
 
-    return {fields: [...fields, ...sampled_fields].filter(x => x.length), extra_fields: extra_fields};
-    //return {fields: [...fields, ...sampled_fields].filter(x => x.length), extra_fields: []};
+    return sampled_fields;//{fields: [...fields, ...sampled_fields].filter(x => x.length), extra_fields: extra_fields};
+	//return {fields: [...fields, ...sampled_fields].filter(x => x.length), extra_fields: []};
 }
 
 
 function _advance_line(start_idx, texts) {
-    const endline_idx = texts.indexOf('\n', start_idx);
-    if (endline_idx == -1) {
+    if (texts.length == 0) {
         return {result: "", next_idx: -1};
     }
-    return {result: _strip(texts.slice(start_idx, endline_idx-1).join("")).split(CELL_SEPARATOR), next_idx: endline_idx};
+	const endline_idx = texts.indexOf('\n', start_idx);
+    if (endline_idx == -1) {
+        var text = texts.slice(start_idx, texts.length-1);
+	    return {result: _strip(text).split(CELL_SEPARATOR), next_idx: endline_idx};
+    }
+    	var text = texts.slice(start_idx, endline_idx-1);
+    return {result: _strip(text).split(CELL_SEPARATOR), next_idx: endline_idx};
 }
 
 
@@ -248,14 +230,13 @@ function _merge_field_suggestions(fields_obj, num) {
 function _maybe_prune_completions(completions_obj, fields, num) {
     // produce a specific number of completion suggestions
     var completions = completions_obj['result'];
-    var partial = completions_obj['partial'];
 
     for(let i = 0; i < completions.length; i++) {
         if (completions[i].length < fields) {
-            return {result: completions.slice(0, i), partial: completions[i]};
+            return {result: completions.slice(0, i)};
         }
         if (i + 2 >= num) {  // adding 1 for header row
-            return {result: completions.slice(0, num - 1), partial: []};
+            return {result: completions.slice(0, num - 1)};
         }
     }
 
@@ -265,39 +246,46 @@ function _maybe_prune_completions(completions_obj, fields, num) {
 // given a topic, a list of fields, and a (possibly empty,
 // possibly partial) list of completions, produces more completions. Passing
 // partial completions avoids repeats
-async function suggest_completions({topic, fields, completions=[], partial=[], side_info=[], temperature=0.0}) {
-    const query_obj = _build_completion_query_context_string({topic: topic, fields: fields, completions: completions, partial: partial, side_info: side_info});
+async function suggest_completions({topic, fields, completions=[], side_info=[], temperature=0.0}) {
+    const query_obj = _build_completion_query_context_string({topic: topic, fields: fields, completions: completions, side_info: side_info});
     const context_string = query_obj["context_string"];
     const existing_completions = query_obj["existing_completions"];
     const response_json = await cached_request({context_string: context_string + existing_completions, logprobs: 0, length: 100, temperature: temperature});
 
     // TODO could use logits here to produce hybrid answers
-    const text_offsets = response_json['data'][0]['text_offset'];
-    const texts = response_json['data'][0]['text'];
+    const text_offsets = response_json['choices'][0]['logprobs']['text_offset'];
+    const texts = response_json['choices'][0]['text'];
 
     // first index after context
-    var start_idx = text_offsets.indexOf(context_string.length + 1);  // always ends on a |
-    var parsed_results = new Array();
+    var start_idx = texts.indexOf('\n');
+	var parsed_results = new Array();
     while (true) {
         var next_line_obj = _advance_line(start_idx, texts)
         var result = next_line_obj['result'];
         var next_idx = next_line_obj['next_idx'];
-        if (next_idx == -1) {
-            break;
-        }
+
         // hack: sometimes we get empty completions :(
-        if (result.length && result != ['']) {
+        if (result.length==fields.length) {
+			for(let i = 0; i < result.length; i++) {
+				result[i] = _strip(result[i].replace('|',''))
+			}
             parsed_results.push(result);
+        }
+		if (next_idx == -1) {
+            break;
         }
         start_idx = next_idx + 2  // skipping newline and starting cell separator
     }
     // parse the last partial line
-    var last_line_tokens = texts.slice(start_idx);
-    if (last_line_tokens.length && last_line_tokens[last_line_tokens.length - 1] == ' |') {
-        last_line_tokens = last_line_tokens.slice(0, last_line_tokens.length - 1);
-    }
-    var last_partial = _strip(last_line_tokens.join("")).split(CELL_SEPARATOR);
-    return {result: parsed_results, partial: last_partial.filter(x => !!(x))};
+    //var last_line_tokens = texts.slice(start_idx);
+    //if (last_line_tokens.length && last_line_tokens[last_line_tokens.length - 1] == ' |') {
+    //    last_line_tokens = last_line_tokens.slice(0, last_line_tokens.length - 1);
+    //}
+    //var last_partial = _strip(last_line_tokens).split(CELL_SEPARATOR);
+	//for(let i = 0; i < last_partial.length; i++) {
+	//	last_partial[i] = _strip(last_partial[i].replace('|',''))
+	//}
+    return {result: parsed_results/*, partial: last_partial.filter(x => !!(x))*/};
 }
 
 
@@ -344,7 +332,9 @@ function suggestHeader() {
     showToast(`Suggesting headers for ${topic}`);
     Excel.run(async function (context) {
         var sheet = context.workbook.worksheets.getActiveWorksheet();
+		showToast('hi');
         var range = context.workbook.getSelectedRange();
+		showToast('my');
         range.load("values,rowIndex,columnIndex,rowCount,columnCount");
         await context.sync();
 
@@ -360,9 +350,10 @@ function suggestHeader() {
 
         // TODO check length == 1
         const fields = range.values;
-        var fields_obj = await suggest_fields({topic: topic, fields: fields[0].filter(x => String(x).length)});
-        var result_fields = _merge_field_suggestions(fields_obj, fields[0].length);
-        sheet.getRangeByIndexes(range.rowIndex, range.columnIndex, 1, result_fields.length).values = [result_fields];
+		
+        var fields_obj = await suggest_fields({topic: topic, count:fields[0].length, fields: fields[0].filter(x => String(x).length)} );
+        //var result_fields = _merge_field_suggestions(fields_obj, fields[0].length);
+        sheet.getRangeByIndexes(range.rowIndex, range.columnIndex, 1, fields_obj.length).values = [fields_obj];
         return context.sync();
     }).catch(errorHandlerFunction);
 }
@@ -392,12 +383,11 @@ function completeTable() {
         }
 
         var completions = range.values.slice(1, range.rowCount);
-        var partial = [];
         for(let i = 0; i < completions.length; i++) {
             var possible_partial = completions[i].filter(x => String(x).length);
             if (possible_partial.length < fields.length) {
                 completions = completions.slice(0, i);
-                partial = possible_partial;
+                //partial = possible_partial;
                 break;
             }
         }
@@ -405,10 +395,10 @@ function completeTable() {
         var completions_obj = null;
         var temperature = 0.0;
         if (side_info === null) {
-            completions_obj = await suggest_completions({topic: topic, fields: fields, completions: completions, partial: partial, temperature: temperature});
+            completions_obj = await suggest_completions({topic: topic, fields: fields, completions: completions, temperature: temperature});
         }
         else {
-            completions_obj = await suggest_completions({topic: topic, fields: fields, completions: completions, partial: partial, side_info: [side_info], temperature: temperature});
+            completions_obj = await suggest_completions({topic: topic, fields: fields, completions: completions, side_info: [side_info], temperature: temperature});
         }
 
         // set area as unbolded text
@@ -437,16 +427,13 @@ function completeTable() {
             tmp_results.unshift(fields);
             sheet.getRangeByIndexes(range.rowIndex, range.columnIndex, tmp_results.length, range.columnCount).values = tmp_results;
             await context.sync();
-            if (pruned_completions['partial'].length && pruned_completions['partial'][0].startsWith('Please build a table')) {
-                break;
-            }
             if (tmp_results.length == range.rowCount) {
                 break;
             }
             if (i < max_tries - 1) {
                 showToast(`Completing a table for ${topic}...`);
                 temperature += 0.7;
-                completions_obj = await suggest_completions({topic: topic, fields: fields, completions: pruned_completions['result'], partial: pruned_completions['partial'], temperature: temperature});
+                completions_obj = await suggest_completions({topic: topic, fields: fields, completions: pruned_completions['result'], temperature: temperature});
             }
         }
         if (pruned_completions["result"].length + 1 != range.rowCount) {
@@ -481,4 +468,5 @@ function toggleExtraInfo() {
         document.getElementById("toggle-extra-info-hidden").style.display = "none";
         extra_info_visible = true;
     }
+	
 }
