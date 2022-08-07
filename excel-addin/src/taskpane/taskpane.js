@@ -336,9 +336,7 @@ function suggestHeader() {
     showToast(`Suggesting headers for ${topic}`);
     Excel.run(async function (context) {
         var sheet = context.workbook.worksheets.getActiveWorksheet();
-		showToast('hi');
         var range = context.workbook.getSelectedRange();
-		showToast('my');
         range.load("values,rowIndex,columnIndex,rowCount,columnCount");
         await context.sync();
 
